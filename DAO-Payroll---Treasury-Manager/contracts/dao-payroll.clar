@@ -223,3 +223,81 @@
         total-disbursed: (+ (get total-disbursed treasury) bonus-amount),
         current-month-spent: (+ (get current-month-spent treasury) bonus-amount)
       })))))
+
+(define-public (create-milestone 
+  (assignee principal)
+  (description (string-ascii 256))
+  (reward uint)
+  (due-date uint)
+  (category (string-ascii 32))
+  (priority uint))
+  (let ((caller tx-sender)
+        (milestone-id (default-to u0 (map-get? dao-milestone-counter caller)))
+        (next-id (+ milestone-id u1))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (>= (get balance treasury) reward) err-insufficient-funds)
+    (asserts! (> due-date block-height) err-invalid-period)
+    (asserts! (<= priority u5) err-invalid-amount)
+    
+    (map-set milestones 
+      {dao: caller, milestone-id: next-id}
+      {
+        assignee: assignee,
+        description: description,
+        reward: reward,
+        completed: false,
+        approved: false,
+        created-at: block-height,
+        due-date: due-date,
+        category: category,
+        priority: priority
+      })
+    
+    (map-set dao-milestone-counter caller next-id)
+    (ok next-id)))
+
+(define-public (complete-milestone (dao principal) (milestone-id uint))
+  (let ((caller tx-sender)
+        (milestone-key {dao: dao, milestone-id: milestone-id})
+        (milestone (unwrap! (map-get? milestones milestone-key) err-not-found)))
+    (asserts! (is-eq caller (get assignee milestone)) err-unauthorized)
+    (asserts! (not (get completed milestone)) err-milestone-incomplete)
+    
+    (ok (map-set milestones milestone-key
+      (merge milestone {completed: true})))))
+
+(define-public (approve-milestone-payment (milestone-id uint))
+  (let ((caller tx-sender)
+        (milestone-key {dao: caller, milestone-id: milestone-id})
+        (milestone (unwrap! (map-get? milestones milestone-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (get completed milestone) err-milestone-incomplete)
+    (asserts! (not (get approved milestone)) err-already-exists)
+    (asserts! (>= (get balance treasury) (get reward milestone)) err-insufficient-funds)
+    (try! (check-budget-limit caller (get reward milestone)))
+    
+    (try! (as-contract (stx-transfer? (get reward milestone) tx-sender (get assignee milestone))))
+    
+    (map-set milestones milestone-key
+      (merge milestone {approved: true}))
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        balance: (- (get balance treasury) (get reward milestone)),
+        total-disbursed: (+ (get total-disbursed treasury) (get reward milestone)),
+        current-month-spent: (+ (get current-month-spent treasury) (get reward milestone))
+      })))))
+
+(define-public (update-milestone-priority (milestone-id uint) (new-priority uint))
+  (let ((caller tx-sender)
+        (milestone-key {dao: caller, milestone-id: milestone-id})
+        (milestone (unwrap! (map-get? milestones milestone-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (<= new-priority u5) err-invalid-amount)
+    (asserts! (not (get completed milestone)) err-milestone-incomplete)
+    
+    (ok (map-set milestones milestone-key
+      (merge milestone {priority: new-priority})))))
