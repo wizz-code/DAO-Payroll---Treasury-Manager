@@ -118,3 +118,108 @@
   (let ((treasury (unwrap! (map-get? dao-treasuries dao) err-not-found)))
     (asserts! (<= (+ (get current-month-spent treasury) amount) (get monthly-budget treasury)) err-budget-exceeded)
     (ok true)))
+
+(define-public (hire-employee 
+  (employee principal)
+  (salary uint)
+  (pay-period uint)
+  (role (string-ascii 64)))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (is-none (map-get? dao-employees employee-key)) err-already-exists)
+    (asserts! (> salary u0) err-invalid-amount)
+    (asserts! (> pay-period u0) err-invalid-period)
+    
+    (ok (map-set dao-employees employee-key {
+      salary: salary,
+      pay-period: pay-period,
+      last-payment: u0,
+      next-payment: (+ block-height pay-period),
+      total-earned: u0,
+      active: true,
+      hired-at: block-height,
+      role: role,
+      performance-score: u75
+    }))))
+
+(define-public (update-employee-salary (employee principal) (new-salary uint))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (> new-salary u0) err-invalid-amount)
+    
+    (ok (map-set dao-employees employee-key
+      (merge employment {salary: new-salary})))))
+
+(define-public (update-performance-score (employee principal) (score uint))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (<= score u100) err-invalid-amount)
+    
+    (ok (map-set dao-employees employee-key
+      (merge employment {performance-score: score})))))
+
+(define-public (process-payroll (employee principal))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (get active employment) err-employee-inactive)
+    (asserts! (>= block-height (get next-payment employment)) err-unauthorized)
+    (asserts! (>= (get balance treasury) (get salary employment)) err-insufficient-funds)
+    (try! (check-budget-limit caller (get salary employment)))
+    
+    (try! (as-contract (stx-transfer? (get salary employment) tx-sender employee)))
+    
+    (map-set dao-employees employee-key
+      (merge employment {
+        last-payment: block-height,
+        next-payment: (+ block-height (get pay-period employment)),
+        total-earned: (+ (get total-earned employment) (get salary employment))
+      }))
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        balance: (- (get balance treasury) (get salary employment)),
+        total-disbursed: (+ (get total-disbursed treasury) (get salary employment)),
+        current-month-spent: (+ (get current-month-spent treasury) (get salary employment))
+      })))))
+
+(define-public (terminate-employee (employee principal))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    
+    (ok (map-set dao-employees employee-key
+      (merge employment {active: false})))))
+
+(define-public (award-bonus (employee principal) (bonus-amount uint) (reason (string-ascii 128)))
+  (let ((caller tx-sender)
+        (employee-key {dao: caller, employee: employee})
+        (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found))
+        (current-bonus (default-to u0 (map-get? employee-bonuses employee-key))))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (get active employment) err-employee-inactive)
+    (asserts! (>= (get balance treasury) bonus-amount) err-insufficient-funds)
+    (try! (check-budget-limit caller bonus-amount))
+    
+    (try! (as-contract (stx-transfer? bonus-amount tx-sender employee)))
+    
+    (map-set employee-bonuses employee-key (+ current-bonus bonus-amount))
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        balance: (- (get balance treasury) bonus-amount),
+        total-disbursed: (+ (get total-disbursed treasury) bonus-amount),
+        current-month-spent: (+ (get current-month-spent treasury) bonus-amount)
+      })))))
