@@ -71,10 +71,10 @@
     (ok (map-set dao-treasuries caller {
       balance: initial-deposit,
       total-disbursed: u0,
-      created-at: block-height,
+      created-at: stacks-block-height,
       monthly-budget: monthly-budget,
       current-month-spent: u0,
-      last-budget-reset: block-height,
+      last-budget-reset: stacks-block-height,
       admin: admin
     }))))
 
@@ -106,12 +106,12 @@
   (let ((caller tx-sender)
         (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
     (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
-    (asserts! (>= (- block-height (get last-budget-reset treasury)) u4320) err-unauthorized) ;; ~30 days
+    (asserts! (>= (- stacks-block-height (get last-budget-reset treasury)) u4320) err-unauthorized) ;; ~30 days
     
     (ok (map-set dao-treasuries caller
       (merge treasury {
         current-month-spent: u0,
-        last-budget-reset: block-height
+        last-budget-reset: stacks-block-height
       })))))
 
 (define-private (check-budget-limit (dao principal) (amount uint))
@@ -136,10 +136,10 @@
       salary: salary,
       pay-period: pay-period,
       last-payment: u0,
-      next-payment: (+ block-height pay-period),
+      next-payment: (+ stacks-block-height pay-period),
       total-earned: u0,
       active: true,
-      hired-at: block-height,
+      hired-at: stacks-block-height,
       role: role,
       performance-score: u75
     }))))
@@ -172,7 +172,7 @@
         (employment (unwrap! (map-get? dao-employees employee-key) err-not-found))
         (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
     (asserts! (get active employment) err-employee-inactive)
-    (asserts! (>= block-height (get next-payment employment)) err-unauthorized)
+    (asserts! (>= stacks-block-height (get next-payment employment)) err-unauthorized)
     (asserts! (>= (get balance treasury) (get salary employment)) err-insufficient-funds)
     (try! (check-budget-limit caller (get salary employment)))
     
@@ -180,8 +180,8 @@
     
     (map-set dao-employees employee-key
       (merge employment {
-        last-payment: block-height,
-        next-payment: (+ block-height (get pay-period employment)),
+        last-payment: stacks-block-height,
+        next-payment: (+ stacks-block-height (get pay-period employment)),
         total-earned: (+ (get total-earned employment) (get salary employment))
       }))
     
@@ -237,7 +237,7 @@
         (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
     (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
     (asserts! (>= (get balance treasury) reward) err-insufficient-funds)
-    (asserts! (> due-date block-height) err-invalid-period)
+    (asserts! (> due-date stacks-block-height) err-invalid-period)
     (asserts! (<= priority u5) err-invalid-amount)
     
     (map-set milestones 
@@ -248,7 +248,7 @@
         reward: reward,
         completed: false,
         approved: false,
-        created-at: block-height,
+        created-at: stacks-block-height,
         due-date: due-date,
         category: category,
         priority: priority
