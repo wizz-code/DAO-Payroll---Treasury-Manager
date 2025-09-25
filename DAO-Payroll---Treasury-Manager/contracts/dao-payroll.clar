@@ -59,3 +59,62 @@
 (define-map vacation-requests 
   { dao: principal, employee: principal, request-id: uint }
   { start-date: uint, end-date: uint, approved: bool, created-at: uint })
+
+(define-public (create-treasury (initial-deposit uint) (monthly-budget uint) (admin principal))
+  (let ((caller tx-sender))
+    (asserts! (is-none (map-get? dao-treasuries caller)) err-already-exists)
+    (asserts! (>= (stx-get-balance caller) initial-deposit) err-insufficient-funds)
+    (asserts! (> monthly-budget u0) err-invalid-amount)
+    
+    (try! (stx-transfer? initial-deposit caller (as-contract tx-sender)))
+    
+    (ok (map-set dao-treasuries caller {
+      balance: initial-deposit,
+      total-disbursed: u0,
+      created-at: block-height,
+      monthly-budget: monthly-budget,
+      current-month-spent: u0,
+      last-budget-reset: block-height,
+      admin: admin
+    }))))
+
+(define-public (add-treasury-funds (amount uint))
+  (let ((caller tx-sender)
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (>= (stx-get-balance caller) amount) err-insufficient-funds)
+    (asserts! (> amount u0) err-invalid-amount)
+    
+    (try! (stx-transfer? amount caller (as-contract tx-sender)))
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        balance: (+ (get balance treasury) amount)
+      })))))
+
+(define-public (update-monthly-budget (new-budget uint))
+  (let ((caller tx-sender)
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (> new-budget u0) err-invalid-amount)
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        monthly-budget: new-budget
+      })))))
+
+(define-public (reset-monthly-budget)
+  (let ((caller tx-sender)
+        (treasury (unwrap! (map-get? dao-treasuries caller) err-not-found)))
+    (asserts! (is-eq caller (get admin treasury)) err-unauthorized)
+    (asserts! (>= (- block-height (get last-budget-reset treasury)) u4320) err-unauthorized) ;; ~30 days
+    
+    (ok (map-set dao-treasuries caller
+      (merge treasury {
+        current-month-spent: u0,
+        last-budget-reset: block-height
+      })))))
+
+(define-private (check-budget-limit (dao principal) (amount uint))
+  (let ((treasury (unwrap! (map-get? dao-treasuries dao) err-not-found)))
+    (asserts! (<= (+ (get current-month-spent treasury) amount) (get monthly-budget treasury)) err-budget-exceeded)
+    (ok true)))
